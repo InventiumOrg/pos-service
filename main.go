@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// re trigger pipeline
 var conn *pgx.Conn
 
 const attemptThreshold = 5
