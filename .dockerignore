@@ -1,0 +1,11 @@
+sqlc.yaml
+Dockerfile
+.gitignore
+.github
+.git
+Makefile
+LICENSE
+README.md
+LICENSE
+.kiro
+.golangci.yaml

@@ -20,7 +20,7 @@ https://docs.sqlc.dev/en/stable/index.html
     ├── config/                # Store Applications Configs
     │     ├── config.go        #
     ├── handlers/              # Handlers Controller for different API Methods
-    │     └── inventory.go     #
+    │     └── pos.go           #
     ├── middlewares/           # Middlewares to check foe authorized client
     |     └── authenticate.go  #
     |── models/                # Models for working with Postgresl
@@ -32,11 +32,11 @@ https://docs.sqlc.dev/en/stable/index.html
 ```
 ## API Routes
 
-- List Inventory:   /inventory
-- Get Inventory:    /inventory/:id
-- Create Inventory: /inventory/:id
-- Update Inventory: /inventory/:id
-- Delete Inventory: /inventory/:id
+- List POS:   /pos
+- Get POS:    /pos/:id
+- Create POS: /pos/:id
+- Update POS: /pos/:id
+- Delete POS: /pos/:id
 
 ## Usage
 
