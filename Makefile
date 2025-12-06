@@ -1,9 +1,9 @@
 postgres:
-	podman run --network inventium --name postgres-1 -e POSTGRES_USER=root -e POSTGRES_PASSWORD=secret -p 5432:5432 -d postgres:16-alpine
+	podman run --network inventium --name postgres -e POSTGRES_USER="$(PG_USER)" -e POSTGRES_PASSWORD="$(PG_PASSWORD)" -p 5432:5432 -d postgres:16-alpine
 createdb:
-	podman exec -it postgres-1 createdb --username=root --owner=root pos-service
+	podman exec -it postgres createdb --username="$(PG_USER)" --owner="$(PG_USER)" pos-service
 dropdb:
-	podman exec -it postgres-1 dropdb --username=root pos-service
+	podman exec -it postgres dropdb --username="$(PG_USER)" pos-service
 migrateup:
 	migrate -path ./models/migration -database "$(DB_SOURCE)" -verbose up
 migratedown:
@@ -11,7 +11,7 @@ migratedown:
 sqlc:
 	sqlc generate --no-remote
 loaddata:
-	PGPASSWORD=secret psql -h localhost -U root -d inventium -f data/sql/inventium.sql
+	PGPASSWORD="$(PG_PASSWORD)" psql -h localhost -U root -d inventium -f data/sql/inventium.sql
 runcontainer:
 	podman run --network inventium --name pos-service -p 7450:7450 -d -e DB_SOURCE="$(DB_SOURCE)" -e CLERK_KEY="$(CLERK_KEY)" pos-service:1.0.0
 .PHONY: postgres createdb dropdb migrateup migratedown sqlc loaddata runcontainer
