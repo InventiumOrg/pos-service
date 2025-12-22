@@ -1,0 +1,25 @@
+version: '3.8'
+name: invenitum
+services:
+  pos-service:
+    container_name: pos-service
+    image: pos-service:1.0.0
+    env_file:
+      - app.env
+    ports:
+      - "11890:11890"
+    volumes:
+      - ./logs:/logs
+    networks:
+      - inventium
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11890/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  inventium:
+    external: true

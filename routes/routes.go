@@ -2,7 +2,8 @@ package routes
 
 import (
 	handlers "pos-service/handlers"
-	"pos-service/middlewares"
+	// "pos-service/middlewares"
+	"pos-service/observability"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
@@ -13,10 +14,10 @@ type Route struct {
 	handlers *handlers.Handlers
 }
 
-func NewRoute(db *pgx.Conn) *Route {
+func NewRoute(db *pgx.Conn, prometheusMetrics *observability.PrometheusMetrics) *Route {
 	return &Route{
 		db:       db,
-		handlers: handlers.NewHandlers(db),
+		handlers: handlers.NewHandlers(db, prometheusMetrics),
 	}
 }
 
@@ -24,7 +25,7 @@ func (r *Route) AddPOSRoutes(router *gin.Engine) {
 	v1 := router.Group("/v1")
 	{
 		inventory := v1.Group("/pos")
-		inventory.Use(middlewares.ClerkAuth(r.db))
+		// inventory.Use(middlewares.ClerkAuth(r.db))
 		{
 			inventory.GET("/:id", r.handlers.GetPOS)
 			inventory.GET("/list", r.handlers.ListPOS)
