@@ -1,287 +1,338 @@
 package handlers
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 	models "pos-service/models/sqlc"
+	"pos-service/observability"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
 
+const posIDAttr = "pos.id"
+const statusAttr = "operation.status"
+
 type Handlers struct {
-	db      *pgx.Conn
-	queries *models.Queries
-	tracer  trace.Tracer
+	db                *pgx.Conn
+	queries           *models.Queries
+	tracer            trace.Tracer
+	prometheusMetrics *observability.PrometheusMetrics
 }
 
-func NewHandlers(db *pgx.Conn) *Handlers {
+func NewHandlers(db *pgx.Conn, prometheusMetrics *observability.PrometheusMetrics) *Handlers {
 	return &Handlers{
-		db:      db,
-		queries: models.New(db),
-		tracer:  otel.Tracer("pos-service/handlers"),
+		db:                db,
+		queries:           models.New(db),
+		tracer:            otel.Tracer("pos-service/handlers"),
+		prometheusMetrics: prometheusMetrics,
 	}
 }
 
 func (h *Handlers) GetPOS(ctx *gin.Context) {
-	_, existed := ctx.Get("claims")
-	if !existed {
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Claims not found in context",
-		})
-		return
-	}
+	spanCtx, span := h.tracer.Start(ctx.Request.Context(), "GetPOS")
+	defer span.End()
+
 	idStr := ctx.Param("id")
-	id, err := strconv.ParseInt(idStr, 10, 32)
+	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
+		span.RecordError(err)
 		ctx.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid storage room ID format",
+			"error": "Invalid POS ID format",
 		})
 		return
-	}
-	POS, err := h.queries.GetPOS(ctx, int32(id))
-	if err != nil {
-		slog.Error("Got an error while getting inventories: ", slog.Any(err.Error(), "err"))
-	} else {
-		ctx.JSON(200, gin.H{
-			"message": "Get Storage Room Successfully",
-			"data":    POS,
-		})
 	}
 
+	span.SetAttributes(attribute.Int64(posIDAttr, id))
+
+	dbStart := time.Now()
+	POS, err := h.queries.GetPOS(spanCtx, id)
+	dbDuration := time.Since(dbStart)
+
+	if h.prometheusMetrics != nil {
+		h.prometheusMetrics.RecordDBOperation("get", "pos", dbDuration, err)
+	}
+
+	if err != nil {
+		span.RecordError(err)
+		slog.Error("Got an error while getting POS", slog.Any("err", err.Error()))
+		ctx.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to get POS",
+		})
+		return
+	}
+
+	// Record successful retrieval (Prometheus)
+	if h.prometheusMetrics != nil {
+		h.prometheusMetrics.RecordPOSOperation("get", "pos", POS.Location)
+	}
+
+	span.SetAttributes(
+		attribute.String(statusAttr, "success"),
+		attribute.String("pos.name", POS.Name),
+	)
+	ctx.JSON(200, gin.H{
+		"message": "Get POS Successfully",
+		"data":    POS,
+	})
 }
 
 func (h *Handlers) ListPOS(ctx *gin.Context) {
-	// Start a new span for this operation
-	spanCtx, span := h.tracer.Start(ctx.Request.Context(), "List Storage Room")
+	spanCtx, span := h.tracer.Start(ctx.Request.Context(), "ListPOS")
 	defer span.End()
 
-	_, existed := ctx.Get("claims")
-	if !existed {
-		span.RecordError(fmt.Errorf("claims not found in context"))
-		span.SetAttributes(attribute.String("error", "claims_not_found"))
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Claims not found in context",
-		})
-		return
-	}
-
-	// Add attributes to the span
 	span.SetAttributes(
-		attribute.Int("POS.limit", 10),
-		attribute.Int("POS.offset", 0),
+		attribute.Int("pos.limit", 10),
+		attribute.Int("pos.offset", 0),
 	)
 
+	dbStart := time.Now()
 	POSs, err := h.queries.ListPOS(spanCtx, models.ListPOSParams{
 		Limit:  10,
 		Offset: 0,
 	})
+	dbDuration := time.Since(dbStart).Seconds()
+
+	if h.prometheusMetrics != nil {
+		h.prometheusMetrics.RecordDBOperation("list", "pos", time.Duration(dbDuration), err)
+	}
+
 	if err != nil {
 		span.RecordError(err)
-		span.SetAttributes(attribute.String("error", "database_query_failed"))
-		slog.Error("Got an error while listing storage rooms: ", slog.Any("err", err.Error()))
+		slog.Error("Got an error while listing POS", slog.Any("err", err.Error()))
 		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to list storage rooms",
+			"error": "Failed to list POS",
 		})
 		return
 	}
 
-	// Record successful operation
+	if h.prometheusMetrics != nil {
+		h.prometheusMetrics.RecordPOSOperation("list", "pos", "all")
+	}
+
 	span.SetAttributes(
-		attribute.Int("POS.count", len(POSs)),
-		attribute.String("operation.status", "success"),
+		attribute.Int("pos.count", len(POSs)),
+		attribute.String(statusAttr, "success"),
 	)
 
 	ctx.JSON(200, gin.H{
-		"message": "List Storage Room Successfully",
+		"message": "List POS Successfully",
 		"data":    POSs,
 	})
 }
 
 func (h *Handlers) UpdatePOS(ctx *gin.Context) {
-	_, existed := ctx.Get("claims")
-	if !existed {
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Claims not found in context",
-		})
-		return
-	}
+	spanCtx, span := h.tracer.Start(ctx.Request.Context(), "UpdatePOS")
+	defer span.End()
 
-	// Get inventory ID from URL parameter
 	idStr := ctx.Param("id")
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
+		span.RecordError(err)
 		ctx.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid storage room ID",
+			"error": "Invalid POS ID",
 		})
 		return
 	}
 
-	// Start database transaction
-	tx, err := h.db.Begin(ctx)
+	span.SetAttributes(attribute.Int64("pos.id", id))
+
+	tx, err := h.db.Begin(spanCtx)
 	if err != nil {
+		span.RecordError(err)
 		slog.Error("Failed to start transaction", slog.Any("err", err.Error()))
 		ctx.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to start transaction",
 		})
 		return
 	}
-	defer tx.Rollback(ctx) // This will be ignored if tx.Commit() succeeds
+	defer tx.Rollback(spanCtx)
 
-	// Create queries with transaction
+	// Create query with transaction
 	qtx := h.queries.WithTx(tx)
 
-	// Check if storage room exists before updating
-	_, err = qtx.GetPOS(ctx, int32(id))
+	// Check if pos exists before updating
+	dbStart := time.Now()
+	existingPOS, err := qtx.GetPOS(spanCtx, int64(id))
+	dbDuration := time.Since(dbStart)
+
+	// Record database operation duration for existence check (Prometheus)
+	if h.prometheusMetrics != nil {
+		h.prometheusMetrics.RecordDBOperation("get_for_update", "inventory", dbDuration, err)
+	}
+
 	if err != nil {
-		slog.Error("Storage room not found", slog.Any("err", err.Error()))
+		span.RecordError(err)
+		slog.Error("POS not found", slog.Any("err", err.Error()))
 		ctx.JSON(http.StatusNotFound, gin.H{
-			"error": "Storage room not found",
+			"error": "POS not found",
 		})
 		return
 	}
+	totalSaleUnit := int64(12434232)
 
-	// Parse WarehouseID from string to int32
-	warehouseIDStr := ctx.PostForm("WarehouseId")
-	warehouseID, err := strconv.ParseInt(warehouseIDStr, 10, 32)
-	if err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid warehouse ID format",
-		})
-		return
-	}
-
-	// Update storage room within transaction
+	// Update POS within transaction
 	param := models.UpdatePOSParams{
-		ID: int32(id),
-		Name: pgtype.Text{
-			String: ctx.PostForm("Name"),
-			Valid:  ctx.PostForm("Name") != "",
-		},
-		Location: pgtype.Text{
-			String: ctx.PostForm("Location"),
-			Valid:  ctx.PostForm("Location") != "",
-		},
-		Description: pgtype.Text{
-			String: ctx.PostForm("Description"),
-			Valid:  ctx.PostForm("Description") != "",
-		},
-		TotalSaleUnit: pgtype.Int4{
-			Int32: int32(warehouseID),
-			Valid: true,
-		},
+		ID:            int64(id),
+		Name:          ctx.PostForm("Name"),
+		Location:      ctx.PostForm("Location"),
+		Description:   ctx.PostForm("Description"),
+		TotalSaleUnit: totalSaleUnit,
 	}
 
-	POS, err := qtx.UpdatePOS(ctx, param)
+	dbStart = time.Now()
+	POS, err := qtx.UpdatePOS(spanCtx, param)
+	dbDuration = time.Since(dbStart)
+
+	// Record database operation duration for update (Prometheus)
+	if h.prometheusMetrics != nil {
+		h.prometheusMetrics.RecordDBOperation("update", "pos", dbDuration, err)
+	}
+
 	if err != nil {
-		slog.Error("Could not update storage room", slog.Any("err", err.Error()))
+		slog.Error("Could not update pos", slog.Any("err", err.Error()))
+		span.RecordError(err)
 		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to update storage room",
+			"error": "Failed to update pos",
 		})
 		return
 	}
-
 	// Commit transaction
 	if err := tx.Commit(ctx); err != nil {
 		slog.Error("Failed to commit transaction", slog.Any("err", err.Error()))
+		span.RecordError(err)
 		ctx.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to commit transaction",
 		})
 		return
 	}
 
+	// Record successful update (Prometheus)
+	if h.prometheusMetrics != nil {
+		h.prometheusMetrics.RecordPOSOperation("update", POS.Name, POS.Location)
+
+		// Track location changes if different
+		if existingPOS.Location != POS.Location {
+			h.prometheusMetrics.RecordPOSOperation("location_change", POS.Name, POS.Location)
+		}
+
+		// Track name changes if different
+		if existingPOS.Name != POS.Name {
+			h.prometheusMetrics.RecordPOSOperation("name_change", POS.Name, POS.Location)
+		}
+	}
+
+	span.SetAttributes(attribute.String(statusAttr, "success"))
+
 	ctx.JSON(200, gin.H{
-		"message": "Update Storage Room Successfully",
+		"message": "Update POS Successfully",
 		"data":    POS,
 	})
 }
 
 func (h *Handlers) CreatePOS(ctx *gin.Context) {
-	_, existed := ctx.Get("claims")
-	if !existed {
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Claims not found in context",
-		})
-		return
-	}
+	spanCtx, span := h.tracer.Start(ctx.Request.Context(), "CreatePOS")
+	defer span.End()
 
-	// Parse WarehouseID from string to int32
-	warehouseIDStr := ctx.PostForm("WarehouseId")
-	warehouseID, err := strconv.ParseInt(warehouseIDStr, 10, 32)
+	totalSaleUnitStr := ctx.PostForm("Total Sale Unit")
+	totalSaleUnit, err := strconv.ParseInt(totalSaleUnitStr, 10, 64)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid warehouse ID format",
+			"error": "Error parsing Total Sale Unit",
 		})
-		return
 	}
-
 	param := models.CreatePOSParams{
-		Name: pgtype.Text{
-			String: ctx.PostForm("Name"),
-			Valid:  ctx.PostForm("Name") != "",
-		},
-		Location: pgtype.Text{
-			String: ctx.PostForm("Location"),
-			Valid:  ctx.PostForm("Location") != "",
-		},
-		Description: pgtype.Text{
-			String: ctx.PostForm("Description"),
-			Valid:  ctx.PostForm("Description") != "",
-		},
-		TotalSaleUnit: pgtype.Int4{
-			Int32: int32(warehouseID),
-			Valid: true,
-		},
+		Name:          ctx.PostForm("Name"),
+		Location:      ctx.PostForm("Location"),
+		Description:   ctx.PostForm("Description"),
+		TotalSaleUnit: totalSaleUnit,
 	}
 
-	POS, err := h.queries.CreatePOS(ctx, param)
+	// Add attributes to the span
+	span.SetAttributes(
+		attribute.String("pos.name", param.Name),
+		attribute.String("pos.location", param.Location),
+		attribute.String("pos.description", param.Description),
+		attribute.Int("pos.total_sale_unit", int(param.TotalSaleUnit)),
+	)
+
+	dbStart := time.Now()
+	POS, err := h.queries.CreatePOS(spanCtx, param)
+	dbDuration := time.Since(dbStart)
+
+	// Record database operation duration (Prometheus)
+	if h.prometheusMetrics != nil {
+		h.prometheusMetrics.RecordDBOperation("create", "pos", dbDuration, err)
+	}
+
 	if err != nil {
-		slog.Error("Could not create storage room: ", slog.Any("err", err.Error()))
+		slog.Error("Could not create pos: ", slog.Any("err", err.Error()))
+		span.RecordError(err)
 		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to create storage room",
+			"error": "Failed to create pos",
 		})
 		return
 	}
 
+	// Record successful creation (Prometheus)
+	if h.prometheusMetrics != nil {
+		h.prometheusMetrics.RecordPOSOperation("create", POS.Name, POS.Location)
+		// Update active inventory count (you'd need to query the total count or maintain it)
+		// For now, we'll increment by 1 (in a real app, you'd want to track the actual count)
+		h.prometheusMetrics.UpdatePOSCount(1) // This should be the actual total count
+	}
+
+	span.SetAttributes(attribute.String(statusAttr, "success"))
 	ctx.JSON(200, gin.H{
-		"message": "Create Storage Room Successfully",
+		"message": "Create POS Successfully",
 		"data":    POS,
 	})
 }
 
 func (h *Handlers) DeletePOS(ctx *gin.Context) {
-	_, existed := ctx.Get("claims")
-	if !existed {
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Claims not found in context",
-		})
-		return
-	}
+	spanCtx, span := h.tracer.Start(ctx.Request.Context(), "DeletePOS")
+	defer span.End()
 
 	idStr := ctx.Param("id")
-	id, err := strconv.ParseInt(idStr, 10, 32)
+	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
+		span.RecordError(err)
 		ctx.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid storage room ID format",
+			"error": "Invalid POS ID format",
 		})
 		return
 	}
 
-	err = h.queries.DeletePOS(ctx, int32(id))
+	span.SetAttributes(attribute.Int64(posIDAttr, id))
+
+	dbStart := time.Now()
+	err = h.queries.DeletePOS(spanCtx, id)
+	dbDuration := time.Since(dbStart)
+
+	// Record database operation duration (Prometheus)
+	if h.prometheusMetrics != nil {
+		h.prometheusMetrics.RecordDBOperation("delete", "inventory", dbDuration, err)
+	}
+
 	if err != nil {
-		slog.Error("Failed to delete storage room: ", slog.Any("err", err.Error()))
+		span.RecordError(err)
+		slog.Error("Failed to delete POS", slog.Any("err", err.Error()))
 		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Failed to delete storage room",
+			"error": "Failed to delete POS",
 		})
 		return
-	} else {
-		ctx.JSON(200, gin.H{"message": "Delete Storage Room Successfully"})
 	}
 
+	// Record successful deletion (Prometheus)
+	if h.prometheusMetrics != nil {
+		h.prometheusMetrics.RecordPOSOperation("delete", idStr, "unknown")
+	}
+
+	span.SetAttributes(attribute.String("operation.status", "success"))
+	ctx.JSON(200, gin.H{"message": "Delete POS Successfully"})
 }

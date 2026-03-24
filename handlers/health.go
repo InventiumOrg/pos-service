@@ -13,7 +13,7 @@ func (h *Handlers) HealthzHandler(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{
 		"status":    "ok",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"service":   "warehouse-service",
+		"service":   "pos-service",
 	})
 }
 
