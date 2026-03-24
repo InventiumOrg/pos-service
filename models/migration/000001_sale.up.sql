@@ -1,7 +1,7 @@
 CREATE TABLE "pos" (
   "id" bigserial PRIMARY KEY,
-  "name" varchar NOT NULL,
-  "location" varchar NOT NULL,
-  "description" varchar NOT NULL,
+  "name" varchar(255) NOT NULL,
+  "location" varchar(255) NOT NULL,
+  "description" text NOT NULL,
   "total_sale_unit" bigint NOT NULL
 );

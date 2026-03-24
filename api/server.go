@@ -54,7 +54,7 @@ func NewServer(db *pgx.Conn, serviceName, serviceVersion, otelEndpoint, otelHead
 	router.Use(prometheusMetrics.PrometheusMiddleware())
 	observability.SetupPrometheusEndpoint(router)
 	// Add metrics middleware
-	// router.Use(server.metricsMiddleware())
+	router.Use(server.metricsMiddleware())
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:8000"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},

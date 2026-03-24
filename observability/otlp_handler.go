@@ -223,7 +223,7 @@ func SetupOTLPLogging(endpoint string, serviceName string) error {
 }
 
 // SetupOTLPLoggingWithHeaders configures slog to send logs via OTLP with custom headers
-func SetupOTLPLoggingWithHeaders(endpoint string, serviceName string, headersStr string) error {
+func SetupOTLPLoggingWithHeaders(endpoint, serviceName, headersStr string) error {
 	// Parse headers from environment variable format
 	headers := make(map[string]string)
 	if headersStr != "" {

@@ -15,6 +15,9 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+const posIDAttr = "pos.id"
+const statusAttr = "operation.status"
+
 type Handlers struct {
 	db                *pgx.Conn
 	queries           *models.Queries
@@ -45,7 +48,7 @@ func (h *Handlers) GetPOS(ctx *gin.Context) {
 		return
 	}
 
-	span.SetAttributes(attribute.Int64("pos.id", id))
+	span.SetAttributes(attribute.Int64(posIDAttr, id))
 
 	dbStart := time.Now()
 	POS, err := h.queries.GetPOS(spanCtx, id)
@@ -70,7 +73,7 @@ func (h *Handlers) GetPOS(ctx *gin.Context) {
 	}
 
 	span.SetAttributes(
-		attribute.String("operation.status", "success"),
+		attribute.String(statusAttr, "success"),
 		attribute.String("pos.name", POS.Name),
 	)
 	ctx.JSON(200, gin.H{
@@ -114,7 +117,7 @@ func (h *Handlers) ListPOS(ctx *gin.Context) {
 
 	span.SetAttributes(
 		attribute.Int("pos.count", len(POSs)),
-		attribute.String("operation.status", "success"),
+		attribute.String(statusAttr, "success"),
 	)
 
 	ctx.JSON(200, gin.H{
@@ -224,7 +227,7 @@ func (h *Handlers) UpdatePOS(ctx *gin.Context) {
 		}
 	}
 
-	span.SetAttributes(attribute.String("operation.status", "success"))
+	span.SetAttributes(attribute.String(statusAttr, "success"))
 
 	ctx.JSON(200, gin.H{
 		"message": "Update POS Successfully",
@@ -284,7 +287,7 @@ func (h *Handlers) CreatePOS(ctx *gin.Context) {
 		h.prometheusMetrics.UpdatePOSCount(1) // This should be the actual total count
 	}
 
-	span.SetAttributes(attribute.String("operation.status", "success"))
+	span.SetAttributes(attribute.String(statusAttr, "success"))
 	ctx.JSON(200, gin.H{
 		"message": "Create POS Successfully",
 		"data":    POS,
@@ -305,7 +308,7 @@ func (h *Handlers) DeletePOS(ctx *gin.Context) {
 		return
 	}
 
-	span.SetAttributes(attribute.Int64("pos.id", id))
+	span.SetAttributes(attribute.Int64(posIDAttr, id))
 
 	dbStart := time.Now()
 	err = h.queries.DeletePOS(spanCtx, id)
