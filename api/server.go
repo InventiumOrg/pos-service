@@ -57,7 +57,7 @@ func NewServer(db *pgx.Conn, serviceName, serviceVersion, otelEndpoint, otelHead
 	return server
 }
 
-func (s *Server) Run(addr string, serviceName string) error {
+func (s *Server) Run(addr string, serviceName string, corsAllowOrigins []string) error {
 	_ = s.router.SetTrustedProxies(nil)
 
 	s.router.Use(otelgin.Middleware(serviceName))
@@ -71,7 +71,7 @@ func (s *Server) Run(addr string, serviceName string) error {
 	}
 
 	s.router.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:8000"},
+		AllowOrigins:     corsAllowOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
 		AllowHeaders:     []string{"Origins", "Content-Type", "Authorization", "Bearer"},
 		AllowCredentials: true,

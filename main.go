@@ -79,7 +79,7 @@ func main() {
 
 	router := api.NewServer(conn, config.ServiceName, "1.0.0", config.OTELExporterOTLPEndpoint, config.OTELExporterOTLPHeaders)
 
-	err = router.Run(":11890", config.ServiceName)
+	err = router.Run(":11890", config.ServiceName, config.CORSAllowOriginList())
 	if err != nil {
 		os.Exit(1)
 	}
