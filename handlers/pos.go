@@ -5,6 +5,7 @@ import (
 	"net/http"
 	models "pos-service/models/sqlc"
 	"pos-service/observability"
+	"pos-service/utils"
 	"strconv"
 	"time"
 
@@ -38,13 +39,8 @@ func (h *Handlers) GetPOS(ctx *gin.Context) {
 	spanCtx, span := h.tracer.Start(ctx.Request.Context(), "GetPOS")
 	defer span.End()
 
-	idStr := ctx.Param("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		span.RecordError(err)
-		ctx.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid POS ID format",
-		})
+	id, ok := utils.PathPOSID(ctx, "get pos rejected")
+	if !ok {
 		return
 	}
 
@@ -60,14 +56,13 @@ func (h *Handlers) GetPOS(ctx *gin.Context) {
 
 	if err != nil {
 		span.RecordError(err)
-		slog.Error("Got an error while getting POS", slog.Any("err", err.Error()))
+		slog.Error("failed to get pos", slog.Int64("pos.id", id), slog.Any("err", err))
 		ctx.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to get POS",
 		})
 		return
 	}
 
-	// Record successful retrieval (Prometheus)
 	if h.prometheusMetrics != nil {
 		h.prometheusMetrics.RecordPOSOperation("get", "pos", POS.Location)
 	}
@@ -75,6 +70,12 @@ func (h *Handlers) GetPOS(ctx *gin.Context) {
 	span.SetAttributes(
 		attribute.String(statusAttr, "success"),
 		attribute.String("pos.name", POS.Name),
+	)
+
+	slog.Info("pos retrieved",
+		slog.Int64("pos.id", id),
+		slog.String("pos.name", POS.Name),
+		slog.String("pos.location", POS.Location),
 	)
 	ctx.JSON(200, gin.H{
 		"message": "Get POS Successfully",
@@ -96,15 +97,15 @@ func (h *Handlers) ListPOS(ctx *gin.Context) {
 		Limit:  10,
 		Offset: 0,
 	})
-	dbDuration := time.Since(dbStart).Seconds()
+	dbDuration := time.Since(dbStart)
 
 	if h.prometheusMetrics != nil {
-		h.prometheusMetrics.RecordDBOperation("list", "pos", time.Duration(dbDuration), err)
+		h.prometheusMetrics.RecordDBOperation("list", "pos", dbDuration, err)
 	}
 
 	if err != nil {
 		span.RecordError(err)
-		slog.Error("Got an error while listing POS", slog.Any("err", err.Error()))
+		slog.Error("failed to list pos", slog.Any("err", err))
 		ctx.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to list POS",
 		})
@@ -120,6 +121,7 @@ func (h *Handlers) ListPOS(ctx *gin.Context) {
 		attribute.String(statusAttr, "success"),
 	)
 
+	slog.Info("pos listed", slog.Int("count", len(POSs)))
 	ctx.JSON(200, gin.H{
 		"message": "List POS Successfully",
 		"data":    POSs,
@@ -130,13 +132,8 @@ func (h *Handlers) UpdatePOS(ctx *gin.Context) {
 	spanCtx, span := h.tracer.Start(ctx.Request.Context(), "UpdatePOS")
 	defer span.End()
 
-	idStr := ctx.Param("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		span.RecordError(err)
-		ctx.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid POS ID",
-		})
+	id, ok := utils.PathPOSID(ctx, "update pos rejected")
+	if !ok {
 		return
 	}
 
@@ -145,7 +142,7 @@ func (h *Handlers) UpdatePOS(ctx *gin.Context) {
 	tx, err := h.db.Begin(spanCtx)
 	if err != nil {
 		span.RecordError(err)
-		slog.Error("Failed to start transaction", slog.Any("err", err.Error()))
+		slog.Error("failed to start transaction", slog.Any("err", err))
 		ctx.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to start transaction",
 		})
@@ -153,22 +150,19 @@ func (h *Handlers) UpdatePOS(ctx *gin.Context) {
 	}
 	defer tx.Rollback(spanCtx)
 
-	// Create query with transaction
 	qtx := h.queries.WithTx(tx)
 
-	// Check if pos exists before updating
 	dbStart := time.Now()
-	existingPOS, err := qtx.GetPOS(spanCtx, int64(id))
+	existingPOS, err := qtx.GetPOS(spanCtx, id)
 	dbDuration := time.Since(dbStart)
 
-	// Record database operation duration for existence check (Prometheus)
 	if h.prometheusMetrics != nil {
-		h.prometheusMetrics.RecordDBOperation("get_for_update", "inventory", dbDuration, err)
+		h.prometheusMetrics.RecordDBOperation("get_for_update", "pos", dbDuration, err)
 	}
 
 	if err != nil {
 		span.RecordError(err)
-		slog.Error("POS not found", slog.Any("err", err.Error()))
+		slog.Error("pos not found", slog.Int64("pos.id", id), slog.Any("err", err))
 		ctx.JSON(http.StatusNotFound, gin.H{
 			"error": "POS not found",
 		})
@@ -176,9 +170,8 @@ func (h *Handlers) UpdatePOS(ctx *gin.Context) {
 	}
 	totalSaleUnit := int64(12434232)
 
-	// Update POS within transaction
 	param := models.UpdatePOSParams{
-		ID:            int64(id),
+		ID:            id,
 		Name:          ctx.PostForm("Name"),
 		Location:      ctx.PostForm("Location"),
 		Description:   ctx.PostForm("Description"),
@@ -189,22 +182,20 @@ func (h *Handlers) UpdatePOS(ctx *gin.Context) {
 	POS, err := qtx.UpdatePOS(spanCtx, param)
 	dbDuration = time.Since(dbStart)
 
-	// Record database operation duration for update (Prometheus)
 	if h.prometheusMetrics != nil {
 		h.prometheusMetrics.RecordDBOperation("update", "pos", dbDuration, err)
 	}
 
 	if err != nil {
-		slog.Error("Could not update pos", slog.Any("err", err.Error()))
+		slog.Error("failed to update pos", slog.Int64("pos.id", id), slog.Any("err", err))
 		span.RecordError(err)
 		ctx.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to update pos",
 		})
 		return
 	}
-	// Commit transaction
-	if err := tx.Commit(ctx); err != nil {
-		slog.Error("Failed to commit transaction", slog.Any("err", err.Error()))
+	if err := tx.Commit(spanCtx); err != nil {
+		slog.Error("failed to commit transaction", slog.Any("err", err))
 		span.RecordError(err)
 		ctx.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to commit transaction",
@@ -212,16 +203,13 @@ func (h *Handlers) UpdatePOS(ctx *gin.Context) {
 		return
 	}
 
-	// Record successful update (Prometheus)
 	if h.prometheusMetrics != nil {
 		h.prometheusMetrics.RecordPOSOperation("update", POS.Name, POS.Location)
 
-		// Track location changes if different
 		if existingPOS.Location != POS.Location {
 			h.prometheusMetrics.RecordPOSOperation("location_change", POS.Name, POS.Location)
 		}
 
-		// Track name changes if different
 		if existingPOS.Name != POS.Name {
 			h.prometheusMetrics.RecordPOSOperation("name_change", POS.Name, POS.Location)
 		}
@@ -229,6 +217,11 @@ func (h *Handlers) UpdatePOS(ctx *gin.Context) {
 
 	span.SetAttributes(attribute.String(statusAttr, "success"))
 
+	slog.Info("pos updated",
+		slog.Int64("pos.id", id),
+		slog.String("pos.name", POS.Name),
+		slog.String("pos.location", POS.Location),
+	)
 	ctx.JSON(200, gin.H{
 		"message": "Update POS Successfully",
 		"data":    POS,
@@ -242,9 +235,15 @@ func (h *Handlers) CreatePOS(ctx *gin.Context) {
 	totalSaleUnitStr := ctx.PostForm("Total Sale Unit")
 	totalSaleUnit, err := strconv.ParseInt(totalSaleUnitStr, 10, 64)
 	if err != nil {
+		span.RecordError(err)
+		slog.Info("create pos rejected: invalid total sale unit",
+			slog.String("total_sale_unit", totalSaleUnitStr),
+			slog.Any("err", err),
+		)
 		ctx.JSON(http.StatusBadRequest, gin.H{
 			"error": "Error parsing Total Sale Unit",
 		})
+		return
 	}
 	param := models.CreatePOSParams{
 		Name:          ctx.PostForm("Name"),
@@ -253,25 +252,26 @@ func (h *Handlers) CreatePOS(ctx *gin.Context) {
 		TotalSaleUnit: totalSaleUnit,
 	}
 
-	// Add attributes to the span
 	span.SetAttributes(
 		attribute.String("pos.name", param.Name),
 		attribute.String("pos.location", param.Location),
 		attribute.String("pos.description", param.Description),
-		attribute.Int("pos.total_sale_unit", int(param.TotalSaleUnit)),
+		attribute.Int64("pos.total_sale_unit", param.TotalSaleUnit),
 	)
 
 	dbStart := time.Now()
 	POS, err := h.queries.CreatePOS(spanCtx, param)
 	dbDuration := time.Since(dbStart)
 
-	// Record database operation duration (Prometheus)
 	if h.prometheusMetrics != nil {
 		h.prometheusMetrics.RecordDBOperation("create", "pos", dbDuration, err)
 	}
 
 	if err != nil {
-		slog.Error("Could not create pos: ", slog.Any("err", err.Error()))
+		slog.Error("failed to create pos",
+			slog.String("pos.name", param.Name),
+			slog.Any("err", err),
+		)
 		span.RecordError(err)
 		ctx.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to create pos",
@@ -279,16 +279,19 @@ func (h *Handlers) CreatePOS(ctx *gin.Context) {
 		return
 	}
 
-	// Record successful creation (Prometheus)
 	if h.prometheusMetrics != nil {
 		h.prometheusMetrics.RecordPOSOperation("create", POS.Name, POS.Location)
-		// Update active inventory count (you'd need to query the total count or maintain it)
-		// For now, we'll increment by 1 (in a real app, you'd want to track the actual count)
-		h.prometheusMetrics.UpdatePOSCount(1) // This should be the actual total count
+		h.prometheusMetrics.UpdatePOSCount(1)
 	}
 
 	span.SetAttributes(attribute.String(statusAttr, "success"))
-	ctx.JSON(200, gin.H{
+
+	slog.Info("pos created",
+		slog.Int64("pos.id", POS.ID),
+		slog.String("pos.name", POS.Name),
+		slog.String("pos.location", POS.Location),
+	)
+	ctx.JSON(http.StatusCreated, gin.H{
 		"message": "Create POS Successfully",
 		"data":    POS,
 	})
@@ -298,41 +301,37 @@ func (h *Handlers) DeletePOS(ctx *gin.Context) {
 	spanCtx, span := h.tracer.Start(ctx.Request.Context(), "DeletePOS")
 	defer span.End()
 
-	idStr := ctx.Param("id")
-	id, err := strconv.ParseInt(idStr, 10, 64)
-	if err != nil {
-		span.RecordError(err)
-		ctx.JSON(http.StatusBadRequest, gin.H{
-			"error": "Invalid POS ID format",
-		})
+	id, ok := utils.PathPOSID(ctx, "delete pos rejected")
+	if !ok {
 		return
 	}
 
 	span.SetAttributes(attribute.Int64(posIDAttr, id))
 
 	dbStart := time.Now()
-	err = h.queries.DeletePOS(spanCtx, id)
+	err := h.queries.DeletePOS(spanCtx, id)
 	dbDuration := time.Since(dbStart)
 
-	// Record database operation duration (Prometheus)
 	if h.prometheusMetrics != nil {
-		h.prometheusMetrics.RecordDBOperation("delete", "inventory", dbDuration, err)
+		h.prometheusMetrics.RecordDBOperation("delete", "pos", dbDuration, err)
 	}
 
 	if err != nil {
 		span.RecordError(err)
-		slog.Error("Failed to delete POS", slog.Any("err", err.Error()))
+		slog.Error("failed to delete pos", slog.Int64("pos.id", id), slog.Any("err", err))
 		ctx.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Failed to delete POS",
 		})
 		return
 	}
 
-	// Record successful deletion (Prometheus)
 	if h.prometheusMetrics != nil {
-		h.prometheusMetrics.RecordPOSOperation("delete", idStr, "unknown")
+		h.prometheusMetrics.RecordPOSOperation("delete", strconv.FormatInt(id, 10), "unknown")
+		h.prometheusMetrics.UpdatePOSCount(-1)
 	}
 
 	span.SetAttributes(attribute.String("operation.status", "success"))
+
+	slog.Info("pos deleted", slog.Int64("pos.id", id))
 	ctx.JSON(200, gin.H{"message": "Delete POS Successfully"})
 }

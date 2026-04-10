@@ -75,8 +75,15 @@ func newResource(serviceName, serviceVersion string) (*resource.Resource, error)
 		semconv.SchemaURL,
 		semconv.ServiceName(serviceName),
 		semconv.ServiceVersion(serviceVersion),
-		semconv.ServiceInstanceID(serviceName),
+		semconv.ServiceInstanceID("pos-service"),
 	), nil
+}
+
+// GetLogger returns a structured logger that integrates with OpenTelemetry
+func GetLogger(name string) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})).With("service", name)
 }
 
 func newPropagator() propagation.TextMapPropagator {

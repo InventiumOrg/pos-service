@@ -112,11 +112,12 @@ func NewPrometheusMetrics(serviceName string) *PrometheusMetrics {
 		metrics.HTTPRequestsTotal,
 		metrics.HTTPRequestDuration,
 		metrics.HTTPRequestsInFlight,
-		metrics.HTTPResponseStatusTotal, // Register the new status code metric
+		metrics.HTTPResponseStatusTotal,
 		metrics.DBConnectionsActive,
 		metrics.DBOperationDuration,
 		metrics.DBOperationErrors,
 		metrics.POSOperationsTotal,
+		metrics.POSActive,
 		metrics.AuthenticationAttempts,
 	)
 	slog.Info("Prometheus metrics registered", slog.String("service", serviceName))
@@ -131,7 +132,7 @@ func getStatusClass(statusCode int) string {
 		return "3xx"
 	case statusCode >= 400 && statusCode < 500:
 		return "4xx"
-	case statusCode <= 500:
+	case statusCode >= 500:
 		return "5xx"
 	default:
 		return "1xx"
@@ -201,9 +202,9 @@ func (m *PrometheusMetrics) RecordPOSOperation(operation, category, location str
 	m.POSOperationsTotal.WithLabelValues(operation, category, location).Inc()
 }
 
-// UpdatePOSCount updates the current count of active inventory items
-func (m *PrometheusMetrics) UpdatePOSCount(count float64) {
-	m.POSActive.Set(count)
+// UpdatePOSCount adjusts the active POS gauge (delta, same pattern as order-service orders count).
+func (m *PrometheusMetrics) UpdatePOSCount(delta float64) {
+	m.POSActive.Add(delta)
 }
 
 // RecordAuthAttempt records authentication attempts
